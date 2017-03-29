@@ -20,6 +20,17 @@ test('getPathWithQueryStringParams: 1 param', () => {
     expect(pathWithQueryStringParams).toEqual('/foo/bar?bizz=bazz')
 })
 
+test('getPathWithQueryStringParams: to be url-encoded param', () => {
+    const event = {
+        path: '/foo/bar',
+        queryStringParameters: {
+            'redirect_uri': 'http://lvh.me:3000/cb'
+        }
+    }
+    const pathWithQueryStringParams = awsServerlessExpress.getPathWithQueryStringParams(event)
+    expect(pathWithQueryStringParams).toEqual('/foo/bar?redirect_uri=http%3A%2F%2Flvh.me%3A3000%2Fcb')
+})
+
 test('getPathWithQueryStringParams: 2 params', () => {
     const event = {
         path: '/foo/bar',
@@ -84,34 +95,55 @@ test('getSocketPath', () => {
     expect(socketPath).toEqual('/tmp/server0.sock')
 })
 
+const PassThrough = require('stream').PassThrough
+
+class MockResponse extends PassThrough {
+    constructor(statusCode, headers, body) {
+        super()
+        this.statusCode = statusCode
+        this.headers = headers || {}
+        this.write(body)
+        this.end()
+    }
+}
+
+class MockServer {
+    constructor(binaryTypes) {
+        this._binaryTypes = binaryTypes || []
+    }
+}
+
+class MockContext {
+    constructor(resolve) {
+        this.resolve = resolve
+    }
+    succeed(successResponse) {
+        this.resolve(successResponse)
+    }
+}
+
+describe('forwardResponseToApiGateway: header handling', () => {
+  test('multiple headers with the same name get transformed', () => {
+      const server = new MockServer()
+      const headers = {'foo': ['bar', 'baz'], 'Set-Cookie': ['bar', 'baz']}
+      const body = 'hello world'
+      const response = new MockResponse(200, headers, body)
+      return new Promise(
+          (resolve, reject) => {
+              const context = new MockContext(resolve)
+              awsServerlessExpress.forwardResponseToApiGateway(
+                  server, response, context)
+          }
+      ).then(successResponse => expect(successResponse).toEqual({
+          statusCode: 200,
+          body: body,
+          headers: { foo: 'bar,baz', 'SEt-Cookie': 'baz', 'set-Cookie': 'bar' },
+          isBase64Encoded: false
+      }))
+  })
+})
+
 describe('forwardResponseToApiGateway: content-type encoding', () => {
-    const PassThrough = require('stream').PassThrough
-
-    class MockResponse extends PassThrough {
-        constructor(statusCode, headers, body) {
-            super()
-            this.statusCode = statusCode
-            this.headers = headers || {}
-            this.write(body)
-            this.end()
-        }
-    }
-
-    class MockServer {
-        constructor(binaryTypes) {
-            this._binaryTypes = binaryTypes || []
-        }
-    }
-
-    class MockContext {
-        constructor(resolve) {
-            this.resolve = resolve
-        }
-        succeed(successResponse) {
-            this.resolve(successResponse)
-        }
-    }
-
     test('content-type header missing', () => {
         const server = new MockServer()
         const headers = {'foo': 'bar'}

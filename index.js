@@ -14,15 +14,11 @@
  */
 'use strict'
 const http = require('http')
+const url = require('url')
+const binarycase = require('binary-case')
 
 function getPathWithQueryStringParams(event) {
-    const queryStringKeys = Object.keys(event.queryStringParameters || {})
-
-    if (queryStringKeys.length === 0) return event.path
-
-    const queryStringParams = queryStringKeys.map(queryStringKey => `${queryStringKey}=${encodeURIComponent(event.queryStringParameters[queryStringKey])}`).join('&')
-
-    return `${event.path}?${queryStringParams}`
+  return url.format({ pathname: event.path, query: event.queryStringParameters })
 }
 
 function mapApiGatewayEventToHttpRequest(event, context, socketPath) {
@@ -55,12 +51,27 @@ function forwardResponseToApiGateway(server, response, context) {
             const statusCode = response.statusCode
             const headers = response.headers
 
+            // chunked transfer not currently supported by API Gateway
+            if (headers['transfer-encoding'] === 'chunked') delete headers['transfer-encoding']
+
+            // HACK: modifies header casing to get around API Gateway's limitation of not allowing multiple
+            // headers with the same name, as discussed on the AWS Forum https://forums.aws.amazon.com/message.jspa?messageID=725953#725953
             Object.keys(headers)
                 .forEach(h => {
-                    if(Array.isArray(headers[h])) headers[h] = headers[h].join(',')
+                    if(Array.isArray(headers[h])) {
+                      if (h.toLowerCase() === 'set-cookie') {
+                        headers[h].forEach((value, i) => {
+                          headers[binarycase(h, i + 1)] = value
+                        })
+                        delete headers[h]
+                      } else {
+                        headers[h] = headers[h].join(',')
+                      }
+                    }
                 })
 
-            const contentType = headers['content-type']
+            // only compare mime type; ignore encoding part
+            const contentType = headers['content-type'] ? headers['content-type'].split(';')[0] : ''
             let isBase64Encoded
 
             if (server._binaryTypes.indexOf(contentType) !== -1) {
